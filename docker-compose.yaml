@@ -1,0 +1,330 @@
+version: '3.5'
+
+services:
+  traefik:
+    image: "traefik:1.7"
+    container_name: "traefik"
+    restart: always
+    networks:
+     - app_net
+    command:
+      - --api 
+      - --docker
+      - --defaultentrypoints=https,http
+      - --entryPoints=Name:http Address::80 Redirect.EntryPoint:https
+      - --entryPoints=Name:https Address::443 TLS
+      - --retry
+      - --docker.endpoint=unix:///var/run/docker.sock
+      - --docker.domain=fourlink.net.br
+      - --docker.watch=true
+      - --acme.email=guilhermesantos929@gmail.com
+      - --acme.storage=acme.json
+      - --acme.entryPoint=https
+      - --acme.onHostRule=true
+      - --acme.httpchallenge.entrypoint=http
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+      - "3306:3306"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - /opt/traefik/traefik.toml:/traefik.toml
+      - /opt/traefik/acme.json:/acme.json
+  mariadb:
+    container_name: mariadb
+    #image: telictec/mariadb
+    image: registry.fourlink.net.br/gui199220/mariadb:v1
+    restart: always
+    networks:
+     - app_net
+    #ports:
+      #- '3306:3306'
+    volumes:
+      - mysql-data:/var/lib/data
+      - mysql-mariaconfd:/etc/mysql/mariadb.conf.d
+      - mariadb:/var/lib/mysql
+      - config:/etc/mysql/conf.d
+      - /etc/localtime:/etc/localtime:ro 
+      - /etc/timezone:/etc/timezone:ro 
+    environment:
+      - MYSQL_ROOT_PASSWORD=${SENHADB}
+      - MYSQL_DATABASE=zabbix
+      - MYSQL_USER=zabbix
+      - MYSQL_PASSWORD=${SENHADB}
+         
+
+  zabbix-server:
+    container_name: zabbix-server
+    image: registry.fourlink.net.br/gui199220/zabbix-server:v4
+    networks:
+     - app_net
+    links:
+      - mariadb
+    restart: always
+    ports:
+      - '10051:10051'
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro 
+      - alertscripts:/usr/lib/zabbix/alertscripts
+      - externalscripts:/usr/lib/zabbix/externalscripts
+      - export:/var/lib/zabbix/export
+      - modules:/var/lib/zabbix/modules
+      - enc:/var/lib/zabbix/enc 
+      - ssh_keys:/var/lib/zabbix/ssh_keys
+      - mibs:/usr/share/snmp/mibs
+      - /usr/share/snmp/mibs/ietf:/usr/share/snmp/mibs/ietf
+      - /usr/share/snmp/mibs:/usr/share/snmp/mibs
+      - /usr/share/snmp/mibs/ietf:/var/lib/mibs/ietf
+      - /usr/share/snmp/mibs/iana:/usr/share/snmp/mibs/iana
+    environment:
+      - ZBX_SERVER_HOST=zabbix-server
+      - DB_SERVER_HOST=mariadb
+      - MYSQL_DATABASE=zabbix
+      - MYSQL_USER=zabbix
+      - MYSQL_PASSWORD=${SENHADB}
+      - ZBX_CACHESIZE=${ZBX_CACHESIZE}
+      - ZBX_VALUECACHESIZE=${ZBX_VALUECACHESIZE}
+      - ZBX_TRENDCACHESIZE=${ZBX_TRENDCACHESIZE}
+      - ZBX_STARTDBSYNCERS=${ZBX_STARTDBSYNCERS}
+      - ZBX_HISTORYCACHESIZE=${ZBX_HISTORYCACHESIZE}
+      - ZBX_HISTORYINDEXCACHESIZE=${ZBX_HISTORYINDEXCACHESIZE}
+      - ZBX_TRAPPERIMEOUT=${ZBX_TRAPPERIMEOUT}
+      - ZBX_UNREACHABLEPERIOD=${ZBX_UNREACHABLEPERIOD}
+      - ZBX_UNAVAILABLEDELAY=${ZBX_UNAVAILABLEDELAY}
+      - ZBX_UNREACHABLEDELAY=${ZBX_UNREACHABLEDELAY}
+      - ZBX_LOGSLOWQUERIES=${ZBX_LOGSLOWQUERIES}
+      - ZBX_STARTPOLLERS=${ZBX_STARTPOLLERS}
+      - ZBX_IPMIPOLLERS=${ZBX_IPMIPOLLERS}
+      - ZBX_STARTPOLLERSUNREACHABLE=${ZBX_STARTPOLLERSUNREACHABLE}
+      - ZBX_STARTTRAPPERS=${ZBX_STARTTRAPPERS}
+      - ZBX_STARTPINGERS=${ZBX_STARTPINGERS}
+      - ZBX_STARTDISCOVERERS=${ZBX_STARTDISCOVERERS}
+      - ZBX_STARTHTTPPOLLERS=${ZBX_STARTHTTPPOLLERS}
+      - ZBX_HOUSEKEEPINGFREQUENCY=${ZBX_HOUSEKEEPINGFREQUENCY}
+      - ZBX_MAXHOUSEKEEPERDELETE=${ZBX_MAXHOUSEKEEPERDELETE}
+      - ZBX_STARTVMWARECOLLECTORS=${ZBX_STARTVMWARECOLLECTORS}
+      - ZBX_NODEADDRESS=${ZBX_NODEADDRESS}
+      - ZBX_NODEADDRESSPORT=${ZBX_NODEADDRESSPORT}
+      - ZBX_TIMEOUT=${ZBX_TIMEOUT}
+    depends_on:
+      - mariadb
+    deploy:
+     resources:
+       limits:
+         memory: 4G
+         cpus: "2"
+
+  zabbix-frontend:
+    container_name: zabbix-frontend
+    image: zabbix/zabbix-web-apache-mysql:ubuntu-${ZBX_VERSION}
+    networks:
+     - app_net
+    links:
+      - mariadb
+    restart: always
+    volumes:
+      - /etc/localtime:/etc/localtime:ro 
+      - /etc/timezone:/etc/timezone:ro 
+    environment:
+      - DB_SERVER_HOST=mariadb
+      - MYSQL_DATABASE=zabbix
+      - MYSQL_USER=zabbix
+      - MYSQL_PASSWORD=${SENHADB}
+      - PHP_TZ=America/Sao_Paulo
+      - ZBX_SERVER_HOST=zabbix-server
+      - ZBX_SERVER_NAME=${ZBX_SERVER_NAME}
+    depends_on:
+      - mariadb
+    #ports:
+      #- 80:8080
+    labels:
+      - "traefik.frontend.rule=Host:zabbix.fourlink.net.br"
+    deploy:
+     resources:
+       limits:
+         memory: 2g
+         cpus: "2.5"
+
+  zabbix-agent:
+    container_name: zabbix-agent
+    image: zabbix/zabbix-agent2:alpine-${ZBX_VERSION}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: root
+    networks:
+     - app_net
+    links:
+      - zabbix-server
+    restart: always
+    privileged: true
+    volumes:
+      - /var/run:/var/run
+      - ./agent/zabbix_agent2.d:/etc/zabbix/zabbix_agent2.d/plugins.d
+      - ./agent/scripts:/etc/zabbix/scripts
+      - ./agent/ping_dualstack.conf:/etc/zabbix/ping_dualstack.conf
+    ports:
+      - '10050:10050'
+    environment:
+      - ZBX_HOSTNAME=Zabbix server
+      - ZBX_SERVER_HOST=zabbix-server
+    #container_name: zabbix-agent
+    #image: zabbix/zabbix-agent2:alpine-${ZBX_VERSION}
+    #user: root
+    #networks:
+    # - app_net
+    #links:
+    #  - zabbix-server
+    #restart: always
+    #privileged: true
+    #volumes:
+    #  - /var/run:/var/run
+    #  - ./agent:/etc/zabbix/zabbix_agentd.d
+    #  - /etc/localtime:/etc/localtime:ro 
+    #  - /etc/timezone:/etc/timezone:ro 
+    #ports:
+      #- '10050:10050'
+    #environment:
+    #  - ZBX_HOSTNAME=Zabbix server
+    #  - ZBX_SERVER_HOST=zabbix-server
+  
+  grafana:
+    image: grafana/grafana-enterprise:11.3.1-ubuntu
+    container_name: grafana
+    restart: always
+    networks:
+     - app_net
+    links:
+      - zabbix-server
+    user: root
+    volumes:
+      - grafana_data:/var/lib/grafana 
+      - grafana_grafana:/usr/share/grafana 
+      - grafana_etc:/etc/grafana 
+      - /etc/localtime:/etc/localtime:ro 
+      - /etc/timezone:/etc/timezone:ro 
+    environment:
+      - GF_SERVER_ROOT_URL=https://grafana.fourlink.net.br/
+      - GF_SECURITY_ADMIN_PASSWORD=telictec
+      - GF_INSTALL_PLUGINS=alexanderzobnin-zabbix-app
+      - GF_INSTALL_PLUGINS=agenty-flowcharting-panel
+      - GF_INSTALL_PLUGINS=macropower-analytics-panel
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+      - GF_INSTALL_PLUGINS=briangann-gauge-panel
+      - GF_INSTALL_PLUGINS=grafana-polystat-panel
+      - GF_INSTALL_PLUGINS=yesoreyeram-boomtheme-panel
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=alexanderzobnin-zabbix-datasource
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=grafana-cli plugins install michaeldmoore-multistat-panel 
+      - GF_RENDERING_SERVER_URL=http://renderer:8081/render  
+      - GF_RENDERING_CALLBACK_URL=http://grafana:3000
+      - GF_LOG_FILTERS=rendering:debug
+    labels:
+      - "traefik.frontend.rule=Host:grafana.fourlink.net.br"
+    #ports:
+      #- '3000:3000'
+    deploy:
+     resources:
+       limits:
+         memory: 1g
+         cpus: "0.8"
+  renderer:
+    container_name: renderer
+    image: grafana/grafana-image-renderer:latest       
+    restart: always
+    ports:
+      - "8082:8081"
+    networks:
+      - app_net
+  mysql:
+    image: mariadb
+    container_name: mysql
+    restart: always
+    networks:
+     - app_net
+    volumes:
+     - phpipam:/var/lib/mysql
+     - /etc/localtime:/etc/localtime:ro 
+     - /etc/timezone:/etc/timezone:ro 
+    environment:
+     - MYSQL_ROOT_PASSWORD=cast@Muni3
+     - MYSQL_DATABASE=phpipam
+     - MYSQL_USER=phpipam
+     - MYSQL_PASSWORD=cast@Muni3
+     - TZ=America/Sao_Paulo
+  phpipam:
+    image: registry.fourlink.net.br/gui199220/phpipam:v1
+    container_name: phpipam
+    restart: always
+    networks:
+     - app_net
+    volumes:
+     - phpipamweb:/var/www/html/db
+    environment:
+     - MYSQL_DB_HOSTNAME=mysql
+     - MYSQL_DB_USERNAME=phpipam
+     - MYSQL_DB_PASSWORD=cast@Muni3
+     - MYSQL_DB_NAME=phpipam
+     - MYSQL_DB_PORT=3306
+    #ports:
+      #- '81:80'
+    labels:
+      - "traefik.frontend.rule=Host:phpipam.fourlink.net.br"
+  webhook:
+    image: registry.fourlink.net.br/gui199220/webhook:v1
+    restart: always
+    volumes:
+      - webhook:/var/www/
+      - /etc/localtime:/etc/localtime:ro 
+      - /etc/timezone:/etc/timezone:ro 
+    ports:
+      - "8081:80"
+    container_name: webhook
+    networks:
+     - app_net
+    deploy:
+     resources:
+       limits:
+         memory: 256M
+         cpus: "0.8"
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: loki
+    restart: always
+    ports:
+     - 3100:3100
+    command:
+     - -config.file=/etc/loki/local-config.yaml
+     - -print-config-stderr=true
+     - /etc/localtime:/etc/localtime:ro 
+     - /etc/timezone:/etc/timezone:ro 
+    networks:
+     - app_net 
+networks:
+  # docker create telic_network
+  app_net:
+    external: true
+
+
+
+
+volumes:
+  grafana_data:
+  grafana_grafana:
+  grafana_etc:
+  alertscripts:
+  externalscripts:
+  export:
+  modules:
+  enc:
+  ssh_keys:
+  mibs:
+  mysql-data:
+  mysql-mariaconfd:
+  mariadb:
+  config:
+  phpipam:
+  phpipamweb:
+  webhook:
